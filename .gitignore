@@ -1,0 +1,9 @@
+*.img
+*.deb
+*.tar.gz
+linux/
+kernel-pkg/
+firmware-pkg/
+firmware-src/
+build*/
+.DS_Store

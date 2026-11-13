@@ -1,0 +1,568 @@
+# ============================================================================
+# Arch Linux ARM rootfs + kernel for OnePlus Pad 3 Pro (OPD2513) / Pad 4 (OPD2514)
+# iceland / SM8850 (kaanapali)
+# ============================================================================
+
+name: Build Arch Linux
+
+on:
+  workflow_dispatch:
+    inputs:
+      desktop:
+        description: 'Desktop environment (server = no desktop)'
+        type: choice
+        options: [KDE Plasma, GNOME, server]
+        default: KDE Plasma
+
+      autologin:
+        description: 'Log the user in automatically'
+        type: boolean
+        default: true
+
+      username:
+        description: 'User name'
+        type: string
+        default: user
+
+      hostname:
+        description: 'Hostname'
+        type: string
+        default: iceland
+
+      language:
+        description: 'System language'
+        type: choice
+        options:
+          - 'None (C.UTF-8)'
+          - 'zh_CN.UTF-8'
+          - 'en_US.UTF-8'
+          - 'zh_TW.UTF-8'
+          - 'ja_JP.UTF-8'
+          - 'ko_KR.UTF-8'
+          - 'de_DE.UTF-8'
+          - 'fr_FR.UTF-8'
+          - 'es_ES.UTF-8'
+          - 'ru_RU.UTF-8'
+        default: 'zh_CN.UTF-8'
+
+      boot_mode:
+        description: |
+          Rootfs partition:
+          - dual (linux):     a dedicated "linux" partition (dual boot)
+          - single (userdata): the whole userdata partition
+          - custom:           a custom partition name
+        type: choice
+        options:
+          - 'dual (linux)'
+          - 'single (userdata)'
+          - 'custom'
+        default: 'dual (linux)'
+
+      custom_partition:
+        description: 'Partition name (only for boot_mode = custom)'
+        type: string
+        default: ''
+
+      boot_method:
+        description: |
+          Boot artefacts:
+          - android_boot: boot.img (Android header v2: kernel + dtb + initramfs)
+          - uefi_esp:     ESP image for U-Boot / EDK2 (kernel + dtb + initramfs)
+          - none:         rootfs and kernel files only
+        type: choice
+        options: [android_boot, uefi_esp, none]
+        default: android_boot
+
+      quiet_boot:
+        description: 'Add quiet splash to the kernel cmdline'
+        type: boolean
+        default: true
+
+      kernel_repo:
+        description: 'Kernel repository'
+        type: string
+        default: 'https://github.com/map220v/sm8850-mainline'
+
+      kernel_branch:
+        description: 'Kernel branch'
+        type: string
+        default: 'iceland-7.3'
+
+      kernel_config:
+        description: 'Kernel config (path inside the kernel repo)'
+        type: string
+        default: 'arch/arm64/configs/sm8850.config'
+
+      kernel_fragment:
+        description: 'Extra config fragment (path in this repo, empty to skip)'
+        type: string
+        default: 'config/arch-iceland.fragment'
+
+      dtb:
+        description: 'Device tree blob to ship'
+        type: string
+        default: 'kaanapali-oneplus-iceland.dtb'
+
+      firmware_repo:
+        description: 'Firmware repository (downloaded at build time)'
+        type: string
+        default: 'https://github.com/map220v/iceland-firmware'
+
+      firmware_branch:
+        description: 'Firmware branch'
+        type: string
+        default: 'master'
+
+      alarm_tarball:
+        description: 'Arch Linux ARM aarch64 rootfs tarball'
+        type: string
+        default: 'http://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz'
+
+      image_size:
+        description: 'rootfs.img size (e.g. 12G, 16G)'
+        type: string
+        default: '12G'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: "Build Arch rootfs + kernel"
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 360
+
+    permissions:
+      contents: read
+
+    env:
+      ROOTFS_MOUNT: /mnt/rootfs
+      KERNEL_DIR: ${{ github.workspace }}/linux
+
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v4
+
+      - name: "Verify arguments"
+        env:
+          ROOTFS_PASSWORD: ${{ secrets.ROOTFS_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${ROOTFS_PASSWORD:-}" ]]; then
+            echo "::warning::ROOTFS_PASSWORD is not set, the default password 'archlinux' will be used."
+          fi
+          if [[ "${{ inputs.boot_mode }}" == "custom" && -z "${{ inputs.custom_partition }}" ]]; then
+            echo "::error::custom_partition is required when boot_mode = custom"
+            exit 1
+          fi
+
+      - name: "Resolve partition and cmdline"
+        id: part
+        run: |
+          set -euo pipefail
+          case "${{ inputs.boot_mode }}" in
+            'single (userdata)') LABEL=userdata ;;
+            'dual (linux)')      LABEL=linux ;;
+            'custom')            LABEL="${{ inputs.custom_partition }}" ;;
+          esac
+          CMDLINE="root=PARTLABEL=$LABEL rw rootwait console=ttyMSM0,115200n8"
+          if [[ "${{ inputs.quiet_boot }}" == "true" ]]; then
+            CMDLINE="$CMDLINE quiet splash consoleblank=0"
+          fi
+          echo "label=$LABEL" >> "$GITHUB_OUTPUT"
+          echo "cmdline=$CMDLINE" >> "$GITHUB_OUTPUT"
+          echo "✓ root=PARTLABEL=$LABEL"
+
+      - name: "Install build tools"
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison clang cpio curl dosfstools flex git libelf-dev \
+            libssl-dev lld llvm mtools python3 tar xz-utils zstd
+          echo "✓ tools installed"
+
+      # ------------------------------------------------------------------
+      # Kernel
+      # ------------------------------------------------------------------
+
+      - name: "Clone kernel"
+        run: |
+          set -euo pipefail
+          git clone --depth 1 \
+            --branch "${{ inputs.kernel_branch }}" \
+            "${{ inputs.kernel_repo }}" "$KERNEL_DIR"
+          echo "✓ $(git -C "$KERNEL_DIR" log --oneline -1)"
+
+      - name: "Configure kernel"
+        run: |
+          set -euo pipefail
+          cd "$KERNEL_DIR"
+          cp "${{ inputs.kernel_config }}" .config
+          if [[ -n "${{ inputs.kernel_fragment }}" ]]; then
+            scripts/kconfig/merge_config.sh -m \
+              .config "${{ github.workspace }}/${{ inputs.kernel_fragment }}"
+          fi
+          make ARCH=arm64 LLVM=1 olddefconfig
+          echo "✓ $(grep -cE '^CONFIG_.*=y' .config) options enabled"
+
+      - name: "Build kernel"
+        id: kernel
+        run: |
+          set -euo pipefail
+          cd "$KERNEL_DIR"
+          make -j"$(nproc)" ARCH=arm64 LLVM=1 Image Image.gz
+          make -j"$(nproc)" ARCH=arm64 LLVM=1 "qcom/${{ inputs.dtb }}"
+          KVER="$(make -s ARCH=arm64 kernelrelease)"
+          echo "kernel_version=$KVER" >> "$GITHUB_OUTPUT"
+          echo "✓ kernel $KVER built"
+
+      # ------------------------------------------------------------------
+      # Rootfs
+      # ------------------------------------------------------------------
+
+      - name: "Create and mount rootfs"
+        run: |
+          set -euo pipefail
+          truncate -s "${{ inputs.image_size }}" rootfs.img
+          mkfs.ext4 -q -F -L iceland-root rootfs.img
+          sudo mkdir -p "$ROOTFS_MOUNT"
+          sudo mount -o loop rootfs.img "$ROOTFS_MOUNT"
+          echo "✓ rootfs.img mounted"
+
+      - name: "Download Arch Linux ARM"
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 --retry-delay 5 \
+            -o alarm.tar.gz "${{ inputs.alarm_tarball }}"
+          echo "✓ $(du -h alarm.tar.gz | cut -f1) downloaded"
+
+      - name: "Extract rootfs"
+        run: |
+          set -euo pipefail
+          sudo tar -xpf alarm.tar.gz -C "$ROOTFS_MOUNT"
+          rm -f alarm.tar.gz
+          echo "✓ extracted"
+
+      - name: "Mount virtual filesystems"
+        run: |
+          set -euo pipefail
+          sudo mount --bind /dev "$ROOTFS_MOUNT/dev"
+          sudo mount --bind /dev/pts "$ROOTFS_MOUNT/dev/pts"
+          sudo mount -t proc proc "$ROOTFS_MOUNT/proc"
+          sudo mount -t sysfs sys "$ROOTFS_MOUNT/sys"
+          sudo cp /etc/resolv.conf "$ROOTFS_MOUNT/etc/resolv.conf"
+          sudo ln -sf /proc/self/mounts "$ROOTFS_MOUNT/etc/mtab"
+
+      - name: "Initialise pacman keyring"
+        run: |
+          set -euo pipefail
+          printf 'Server = https://mirror.archlinuxarm.org/$arch/$repo\n' | \
+            sudo tee "$ROOTFS_MOUNT/etc/pacman.d/mirrorlist" >/dev/null
+          sudo chroot "$ROOTFS_MOUNT" pacman-key --init
+          sudo chroot "$ROOTFS_MOUNT" pacman-key --populate archlinuxarm
+          echo "✓ keyring ready"
+
+      - name: "Upgrade system"
+        run: |
+          set -euo pipefail
+          sudo chroot "$ROOTFS_MOUNT" pacman -Syu --noconfirm --disable-download-timeout
+          echo "✓ system upgraded"
+
+      - name: "Install base packages"
+        run: |
+          set -euo pipefail
+          sudo chroot "$ROOTFS_MOUNT" pacman -S --needed --noconfirm --disable-download-timeout \
+            sudo vim networkmanager openssh wpa_supplicant iw \
+            wireless-regdb chrony lm_sensors zstd xz \
+            linux-firmware mkinitcpio
+          echo "✓ base packages installed"
+
+      - name: "Install desktop"
+        if: ${{ inputs.desktop == 'KDE Plasma' }}
+        run: |
+          set -euo pipefail
+          sudo chroot "$ROOTFS_MOUNT" pacman -S --needed --noconfirm --disable-download-timeout \
+            plasma-meta sddm konsole dolphin kate firefox \
+            pipewire pipewire-pulse wireplumber
+          echo "✓ KDE Plasma installed"
+
+      - name: "Install desktop"
+        if: ${{ inputs.desktop == 'GNOME' }}
+        run: |
+          set -euo pipefail
+          sudo chroot "$ROOTFS_MOUNT" pacman -S --needed --noconfirm --disable-download-timeout \
+            gnome gdm firefox pipewire pipewire-pulse wireplumber
+          echo "✓ GNOME installed"
+
+      # ------------------------------------------------------------------
+      # System configuration
+      # ------------------------------------------------------------------
+
+      - name: "Configure hostname and locale"
+        run: |
+          set -euo pipefail
+          echo "${{ inputs.hostname }}" | sudo tee "$ROOTFS_MOUNT/etc/hostname" >/dev/null
+
+          LANG_CHOICE="${{ inputs.language }}"
+          if [[ "$LANG_CHOICE" != "None (C.UTF-8)" ]]; then
+            sudo sed -i "s/^# *\\(${LANG_CHOICE//./\\.}\\)/\\1/" "$ROOTFS_MOUNT/etc/locale.gen"
+            sudo chroot "$ROOTFS_MOUNT" locale-gen
+            echo "LANG=$LANG_CHOICE" | sudo tee "$ROOTFS_MOUNT/etc/locale.conf" >/dev/null
+          fi
+          echo "✓ hostname/locale set"
+
+      - name: "Create user"
+        env:
+          ROOTFS_PASSWORD: ${{ secrets.ROOTFS_PASSWORD }}
+        run: |
+          set -euo pipefail
+          PASSWORD="${ROOTFS_PASSWORD:-archlinux}"
+          echo "::add-mask::$PASSWORD"
+          sudo chroot "$ROOTFS_MOUNT" useradd -m -G wheel -s /bin/bash "${{ inputs.username }}"
+          printf '%s:%s\n' "${{ inputs.username }}" "$PASSWORD" | sudo chroot "$ROOTFS_MOUNT" chpasswd
+          printf 'root:%s\n' "$PASSWORD" | sudo chroot "$ROOTFS_MOUNT" chpasswd
+          sudo sed -i 's/^# *%wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' \
+            "$ROOTFS_MOUNT/etc/sudoers"
+          echo "✓ user created"
+
+      - name: "Configure display manager"
+        if: ${{ inputs.desktop != 'server' }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ inputs.desktop }}" == "GNOME" ]]; then
+            sudo chroot "$ROOTFS_MOUNT" systemctl enable gdm
+            if [[ "${{ inputs.autologin }}" == "true" ]]; then
+              sudo mkdir -p "$ROOTFS_MOUNT/etc/gdm"
+              cat <<EOF | sudo tee "$ROOTFS_MOUNT/etc/gdm/custom.conf" >/dev/null
+          [daemon]
+          AutomaticLoginEnable=True
+          AutomaticLogin=${{ inputs.username }}
+          EOF
+            fi
+          else
+            sudo chroot "$ROOTFS_MOUNT" systemctl enable sddm
+            if [[ "${{ inputs.autologin }}" == "true" ]]; then
+              sudo mkdir -p "$ROOTFS_MOUNT/etc/sddm.conf.d"
+              cat <<EOF | sudo tee "$ROOTFS_MOUNT/etc/sddm.conf.d/autologin.conf" >/dev/null
+          [Autologin]
+          User=${{ inputs.username }}
+          Session=plasma
+          EOF
+            fi
+          fi
+          sudo chroot "$ROOTFS_MOUNT" systemctl set-default graphical.target
+          echo "✓ display manager configured"
+
+      - name: "Enable NetworkManager"
+        run: |
+          set -euo pipefail
+          sudo chroot "$ROOTFS_MOUNT" systemctl enable NetworkManager
+
+      # ------------------------------------------------------------------
+      # Kernel + firmware + initramfs
+      # ------------------------------------------------------------------
+
+      - name: "Install kernel"
+        run: |
+          set -euo pipefail
+          cd "$KERNEL_DIR"
+          KVER="${{ steps.kernel.outputs.kernel_version }}"
+          DTB="arch/arm64/boot/dts/qcom/${{ inputs.dtb }}"
+
+          sudo install -Dm644 arch/arm64/boot/Image \
+            "$ROOTFS_MOUNT/boot/vmlinuz-linux-iceland"
+          sudo install -Dm644 arch/arm64/boot/Image.gz \
+            "$ROOTFS_MOUNT/boot/Image.gz"
+          sudo install -Dm644 "$DTB" \
+            "$ROOTFS_MOUNT/boot/$(basename "$DTB")"
+          sudo make -j"$(nproc)" ARCH=arm64 LLVM=1 \
+            INSTALL_MOD_PATH="$ROOTFS_MOUNT" modules_install
+          sudo depmod -b "$ROOTFS_MOUNT" "$KVER"
+
+          cat <<EOF | sudo tee "$ROOTFS_MOUNT/etc/mkinitcpio.d/linux-iceland.preset" >/dev/null
+          ALL_config="/etc/mkinitcpio.conf"
+          ALL_kver="/boot/vmlinuz-linux-iceland"
+          PRESETS=('default')
+          default_image="/boot/initramfs-linux-iceland.img"
+          EOF
+
+          sudo chroot "$ROOTFS_MOUNT" mkinitcpio -p linux-iceland -S autodetect
+          echo "✓ kernel + initramfs installed"
+
+      - name: "Install firmware"
+        run: |
+          set -euo pipefail
+          git clone --depth 1 \
+            --branch "${{ inputs.firmware_branch }}" \
+            "${{ inputs.firmware_repo }}" firmware-src
+          sudo cp -a firmware-src/. "$ROOTFS_MOUNT/usr/lib/firmware/"
+          sudo rm -rf "$ROOTFS_MOUNT/usr/lib/firmware/.git"
+          echo "✓ firmware installed"
+
+      # ------------------------------------------------------------------
+      # Finalise
+      # ------------------------------------------------------------------
+
+      - name: "Configure fstab"
+        run: |
+          set -euo pipefail
+          printf 'PARTLABEL=%s / ext4 defaults 0 1\n' \
+            "${{ steps.part.outputs.label }}" | \
+            sudo tee "$ROOTFS_MOUNT/etc/fstab" >/dev/null
+
+      - name: "Copy boot files out"
+        run: |
+          set -euo pipefail
+          sudo cp "$ROOTFS_MOUNT/boot/vmlinuz-linux-iceland" Image
+          sudo cp "$ROOTFS_MOUNT/boot/Image.gz" Image.gz
+          sudo cp "$ROOTFS_MOUNT/boot/initramfs-linux-iceland.img" initramfs.img
+          echo "✓ boot files copied"
+
+      - name: "Clean up"
+        run: |
+          set -euo pipefail
+          sudo chroot "$ROOTFS_MOUNT" pacman -Scc --noconfirm || true
+          sudo rm -f "$ROOTFS_MOUNT/etc/resolv.conf"
+
+      - name: "Unmount rootfs"
+        if: always()
+        run: |
+          set -euo pipefail
+          for m in dev/pts dev proc sys; do
+            sudo umount "$ROOTFS_MOUNT/$m" 2>/dev/null || true
+          done
+          sudo umount "$ROOTFS_MOUNT" 2>/dev/null || true
+
+      - name: "Finalise image"
+        run: |
+          set -euo pipefail
+          tune2fs -U random rootfs.img >/dev/null
+          echo "✓ rootfs.img finalised"
+
+      # ------------------------------------------------------------------
+      # Boot artefacts
+      # ------------------------------------------------------------------
+
+      - name: "Build boot.img (Android header v2)"
+        if: ${{ inputs.boot_method == 'android_boot' }}
+        run: |
+          set -euo pipefail
+          chmod +x scripts/mkbootimg
+          python3 scripts/mkbootimg \
+            --kernel Image.gz \
+            --dtb "$KERNEL_DIR/arch/arm64/boot/dts/qcom/${{ inputs.dtb }}" \
+            --ramdisk initramfs.img \
+            --cmdline "${{ steps.part.outputs.cmdline }}" \
+            --base 0x00000000 \
+            --kernel_offset 0x00008000 \
+            --ramdisk_offset 0x01000000 \
+            --tags_offset 0x01e00000 \
+            --pagesize 4096 \
+            --header_version 2 \
+            -o boot.img
+          echo "✓ boot.img ($(du -h boot.img | cut -f1))"
+
+      - name: "Build ESP image (UEFI / U-Boot)"
+        if: ${{ inputs.boot_method == 'uefi_esp' }}
+        run: |
+          set -euo pipefail
+          DTB_SRC="$KERNEL_DIR/arch/arm64/boot/dts/qcom/${{ inputs.dtb }}"
+
+          dd if=/dev/zero of=esp.img bs=1M count=512 status=none
+          mformat -i esp.img -F ::
+          mmd -i esp.img ::/EFI ::/EFI/BOOT ::/loader ::/loader/entries ::/iceland ::/extlinux
+
+          mcopy -i esp.img Image ::/iceland/Image
+          mcopy -i esp.img initramfs.img ::/iceland/initramfs.img
+          mcopy -i esp.img "$DTB_SRC" ::/iceland/iceland.dtb
+
+          cat > extlinux.conf <<EOF
+          DEFAULT arch
+          TIMEOUT 30
+          LABEL arch
+              MENU LABEL Arch Linux (iceland)
+              LINUX /iceland/Image
+              FDT /iceland/iceland.dtb
+              INITRD /iceland/initramfs.img
+              APPEND ${{ steps.part.outputs.cmdline }}
+          EOF
+          mcopy -i esp.img extlinux.conf ::/extlinux/extlinux.conf
+
+          cat > iceland.conf <<EOF
+          title   Arch Linux (iceland)
+          linux   /iceland/Image
+          devicetree /iceland/iceland.dtb
+          initrd  /iceland/initramfs.img
+          options ${{ steps.part.outputs.cmdline }}
+          EOF
+          mcopy -i esp.img iceland.conf ::/loader/entries/iceland.conf
+          printf 'default iceland\ntimeout 3\n' > loader.conf
+          mcopy -i esp.img loader.conf ::/loader/loader.conf
+
+          sudo mount -o loop,ro rootfs.img "$ROOTFS_MOUNT"
+          if [[ -f "$ROOTFS_MOUNT/usr/lib/systemd/boot/efi/systemd-bootaa64.efi" ]]; then
+            sudo cp "$ROOTFS_MOUNT/usr/lib/systemd/boot/efi/systemd-bootaa64.efi" systemd-bootaa64.efi
+            mcopy -i esp.img systemd-bootaa64.efi ::/EFI/BOOT/BOOTAA64.EFI
+            echo "  systemd-boot included"
+          else
+            echo "::warning::systemd-boot EFI binary missing, ESP has no EFI/BOOT/BOOTAA64.EFI"
+          fi
+          sudo umount "$ROOTFS_MOUNT"
+          echo "✓ esp.img ($(du -h esp.img | cut -f1))"
+
+      # ------------------------------------------------------------------
+      # Artifacts
+      # ------------------------------------------------------------------
+
+      - name: "Upload rootfs"
+        uses: actions/upload-artifact@v4
+        with:
+          name: arch-rootfs-${{ inputs.desktop }}-${{ steps.part.outputs.label }}
+          path: rootfs.img
+          compression-level: 1
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: "Upload boot image"
+        if: ${{ inputs.boot_method == 'android_boot' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: arch-boot-${{ inputs.desktop }}-${{ steps.part.outputs.label }}
+          path: boot.img
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: "Upload ESP image"
+        if: ${{ inputs.boot_method == 'uefi_esp' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: arch-esp-${{ inputs.desktop }}-${{ steps.part.outputs.label }}
+          path: esp.img
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: "Upload kernel files"
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ steps.kernel.outputs.kernel_version }}
+          path: |
+            Image
+            Image.gz
+            initramfs.img
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: "Summary"
+        run: |
+          {
+            echo "### Arch Linux for iceland (SM8850)"
+            echo ""
+            echo "| Item | Value |"
+            echo "| --- | --- |"
+            echo "| Desktop | ${{ inputs.desktop }} |"
+            echo "| Rootfs partition | ${{ steps.part.outputs.label }} |"
+            echo "| Boot method | ${{ inputs.boot_method }} |"
+            echo "| Kernel | ${{ steps.kernel.outputs.kernel_version }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
