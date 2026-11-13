@@ -252,7 +252,9 @@ jobs:
           sudo mount --bind /dev/pts "$ROOTFS_MOUNT/dev/pts"
           sudo mount -t proc proc "$ROOTFS_MOUNT/proc"
           sudo mount -t sysfs sys "$ROOTFS_MOUNT/sys"
-          sudo cp /etc/resolv.conf "$ROOTFS_MOUNT/etc/resolv.conf"
+          sudo rm -f "$ROOTFS_MOUNT/etc/resolv.conf"
+          printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' | \
+            sudo tee "$ROOTFS_MOUNT/etc/resolv.conf" >/dev/null
           sudo ln -sf /proc/self/mounts "$ROOTFS_MOUNT/etc/mtab"
 
       - name: "Initialise pacman keyring"
