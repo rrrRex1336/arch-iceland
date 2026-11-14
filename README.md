@@ -84,6 +84,26 @@ fastboot reboot
 
 单系统：`boot_mode` 选 `single (userdata)`，改为 `fastboot flash userdata rootfs.img`。
 
+## 一键刷写（dual）
+
+仓库里带了两个脚本：
+
+```bash
+# 1. 用 aria2 从 Actions 产物下载（自动解析 GitHub 的签名直链）
+DESKTOP=denial ./scripts/download-artifacts.sh images
+
+# 2. 刷入 boot_b + linux 分区
+DRY_RUN=1 ./scripts/flash-dual.sh images/boot.img images/rootfs.img   # 先看计划
+./scripts/flash-dual.sh images/boot.img images/rootfs.img            # 确认后执行
+```
+
+`flash-dual.sh` 会检查设备是不是 `canoe`、是否在 ABL fastboot（不是 fastbootd）、
+`linux` 分区是否存在且不小于 rootfs，然后依次 `erase dtbo_b`、`flash boot_b`、
+`flash linux`、`set_active b`、`reboot`。它**不会**重新分区，也不会碰 `userdata`。
+
+> 注意：`linux` 分区需要提前用 TWRP 或 Linux 环境创建好。目前没有公开的 iceland
+> TWRP 构建（官方站点没有，GitHub 上的 SM8850 TWRP 都是别的机型），不要刷。
+
 ## 启动方式与双系统切换
 
 | 方式 | 说明 |
