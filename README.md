@@ -4,7 +4,9 @@
 
 流程沿用 [debian-sheng-kxt](https://github.com/rrrRex1336/debian-sheng-kxt) 的思路：Actions 里下载 Arch Linux ARM aarch64 根文件系统、编译主线内核、自动拉取设备固件，最后打包成可直接 `fastboot flash` 的镜像。
 
-> **状态：构建流程已跑通（GNOME，2026-11-14，约 14 分钟），尚未在真机验证启动。**
+> **状态：构建流程已跑通，尚未在真机验证启动。**
+> 已验证的组合（2026-11-14）：GNOME + `android_boot`、niri + `android_boot`、server + `uefi_esp`。
+> 首次构建约 15 分钟，内核 ccache 命中后约 7 分钟。
 > Debian 版本（[debian-iceland](https://github.com/rrrRex1336/debian-iceland)）同样已完整跑通构建。
 
 ## 产物
