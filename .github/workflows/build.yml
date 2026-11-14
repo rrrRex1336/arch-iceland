@@ -264,6 +264,7 @@ jobs:
             sudo tee "$ROOTFS_MOUNT/etc/pacman.d/mirrorlist" >/dev/null
           sudo chroot "$ROOTFS_MOUNT" pacman-key --init
           sudo chroot "$ROOTFS_MOUNT" pacman-key --populate archlinuxarm
+          sudo chroot "$ROOTFS_MOUNT" pkill gpg-agent 2>/dev/null || true
           echo "✓ keyring ready"
 
       - name: "Upgrade system"
@@ -296,8 +297,13 @@ jobs:
         if: ${{ inputs.desktop == 'GNOME' }}
         run: |
           set -euo pipefail
+          # The "gnome" group pulls gnome-boxes/gnome-books, which still depend on
+          # the removed libsoup2 in ALARM; install the desktop explicitly instead.
           sudo chroot "$ROOTFS_MOUNT" pacman -S --needed --noconfirm --disable-download-timeout \
-            gnome gdm firefox pipewire pipewire-pulse wireplumber
+            gnome-shell gnome-session gnome-control-center gnome-terminal \
+            gnome-keyring gnome-tweaks nautilus gdm \
+            xdg-desktop-portal-gnome \
+            firefox pipewire pipewire-pulse wireplumber
           echo "✓ GNOME installed"
 
       # ------------------------------------------------------------------
@@ -438,6 +444,9 @@ jobs:
           for m in dev/pts dev proc sys; do
             sudo umount "$ROOTFS_MOUNT/$m" 2>/dev/null || true
           done
+          # pacman-key can leave a gpg-agent inside the chroot holding the mount
+          sudo fuser -km "$ROOTFS_MOUNT" 2>/dev/null || true
+          sleep 1
           for attempt in 1 2 3; do
             if sudo umount "$ROOTFS_MOUNT" 2>/dev/null; then break; fi
             sleep 2
