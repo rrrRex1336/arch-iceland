@@ -436,6 +436,29 @@ jobs:
             "${{ steps.part.outputs.label }}" | \
             sudo tee "$ROOTFS_MOUNT/etc/fstab" >/dev/null
 
+      - name: "Verify rootfs"
+        run: |
+          set -euo pipefail
+          KVER="${{ steps.kernel.outputs.kernel_version }}"
+          sudo chroot "$ROOTFS_MOUNT" bash -c "
+            set -e
+            echo '--- /boot ---'
+            ls -lh /boot
+            echo '--- modules ---'
+            test -f /usr/lib/modules/$KVER/modules.dep
+            ls -ld /usr/lib/modules/$KVER
+            echo '--- fstab ---'
+            cat /etc/fstab
+            echo '--- hostname / user ---'
+            cat /etc/hostname
+            id ${{ inputs.username }}
+            echo '--- desktop ---'
+            pacman -Qq | grep -E '^(gnome-shell|niri|gdm|sddm)$' || true
+            echo '--- initramfs ---'
+            ls -lh /boot/initramfs-linux-iceland.img
+          "
+          echo "✓ rootfs verified"
+
       - name: "Copy boot files out"
         run: |
           set -euo pipefail
