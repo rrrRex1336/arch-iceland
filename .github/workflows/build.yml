@@ -179,7 +179,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            bc bison clang cpio curl dosfstools flex git libelf-dev \
+            bc bison ccache clang cpio curl dosfstools flex git libelf-dev \
             libssl-dev lld llvm mtools procps psmisc python3 tar xz-utils zstd
           echo "✓ tools installed"
 
@@ -207,13 +207,27 @@ jobs:
           make ARCH=arm64 LLVM=1 olddefconfig
           echo "✓ $(grep -cE '^CONFIG_.*=y' .config) options enabled"
 
+      - name: "Restore ccache"
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-arch-${{ inputs.kernel_branch }}-${{ hashFiles('config/arch-iceland.fragment') }}
+          restore-keys: |
+            ccache-arch-${{ inputs.kernel_branch }}-
+
       - name: "Build kernel"
         id: kernel
+        env:
+          CCACHE_DIR: /home/runner/.ccache
+          CCACHE_MAXSIZE: 5G
         run: |
           set -euo pipefail
+          export PATH="/usr/lib/ccache:$PATH"
+          ccache --set-config=sloppiness=file_macro,locale,time_macros || true
           cd "$KERNEL_DIR"
           make -j"$(nproc)" ARCH=arm64 LLVM=1 Image Image.gz
           make -j"$(nproc)" ARCH=arm64 LLVM=1 "qcom/${{ inputs.dtb }}"
+          ccache --show-stats | tail -5 || true
           KVER="$(make -s ARCH=arm64 kernelrelease)"
           echo "kernel_version=$KVER" >> "$GITHUB_OUTPUT"
           echo "✓ kernel $KVER built"
