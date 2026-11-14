@@ -11,8 +11,8 @@ on:
       desktop:
         description: 'Desktop environment (server = no desktop)'
         type: choice
-        options: [KDE Plasma, GNOME, server]
-        default: KDE Plasma
+        options: [GNOME, niri, server]
+        default: GNOME
 
       autologin:
         description: 'Log the user in automatically'
@@ -226,7 +226,7 @@ jobs:
         run: |
           set -euo pipefail
           truncate -s "${{ inputs.image_size }}" rootfs.img
-          mkfs.ext4 -q -F -L iceland-root rootfs.img
+          mkfs.ext4 -q -F -L iceland-root -U random rootfs.img
           sudo mkdir -p "$ROOTFS_MOUNT"
           sudo mount -o loop rootfs.img "$ROOTFS_MOUNT"
           echo "✓ rootfs.img mounted"
@@ -282,13 +282,15 @@ jobs:
           echo "✓ base packages installed"
 
       - name: "Install desktop"
-        if: ${{ inputs.desktop == 'KDE Plasma' }}
+        if: ${{ inputs.desktop == 'niri' }}
         run: |
           set -euo pipefail
           sudo chroot "$ROOTFS_MOUNT" pacman -S --needed --noconfirm --disable-download-timeout \
-            plasma-meta sddm konsole dolphin kate firefox \
-            pipewire pipewire-pulse wireplumber
-          echo "✓ KDE Plasma installed"
+            niri xwayland-satellite sddm \
+            foot fuzzel mako swaybg \
+            pipewire pipewire-pulse wireplumber \
+            xdg-desktop-portal-gtk polkit
+          echo "✓ niri installed"
 
       - name: "Install desktop"
         if: ${{ inputs.desktop == 'GNOME' }}
@@ -350,7 +352,7 @@ jobs:
               cat <<EOF | sudo tee "$ROOTFS_MOUNT/etc/sddm.conf.d/autologin.conf" >/dev/null
           [Autologin]
           User=${{ inputs.username }}
-          Session=plasma
+          Session=niri
           EOF
             fi
           fi
@@ -432,15 +434,25 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
+          sync
           for m in dev/pts dev proc sys; do
             sudo umount "$ROOTFS_MOUNT/$m" 2>/dev/null || true
           done
-          sudo umount "$ROOTFS_MOUNT" 2>/dev/null || true
+          for attempt in 1 2 3; do
+            if sudo umount "$ROOTFS_MOUNT" 2>/dev/null; then break; fi
+            sleep 2
+          done
+          if mountpoint -q "$ROOTFS_MOUNT"; then
+            echo "::error::$ROOTFS_MOUNT is still mounted"
+            sudo fuser -vm "$ROOTFS_MOUNT" || true
+            exit 1
+          fi
+          echo "✓ unmounted"
 
       - name: "Finalise image"
         run: |
           set -euo pipefail
-          tune2fs -U random rootfs.img >/dev/null
+          tune2fs -U random rootfs.img
           echo "✓ rootfs.img finalised"
 
       # ------------------------------------------------------------------
