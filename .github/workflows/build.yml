@@ -11,7 +11,7 @@ on:
       desktop:
         description: 'Desktop environment (server = no desktop)'
         type: choice
-        options: [GNOME, niri, server]
+        options: [GNOME, denial, niri, server]
         default: GNOME
 
       autologin:
@@ -297,6 +297,29 @@ jobs:
           echo "✓ base packages installed"
 
       - name: "Install desktop"
+        if: ${{ inputs.desktop == 'denial' }}
+        run: |
+          set -euo pipefail
+          # Denial ships its own signed pacman repository for aarch64.
+          curl -fsSL https://packages.denialwm.org/denial-repo-key.asc -o /tmp/denial.asc
+          sudo cp /tmp/denial.asc "$ROOTFS_MOUNT/tmp/denial.asc"
+          sudo chroot "$ROOTFS_MOUNT" pacman-key --add /tmp/denial.asc
+          sudo chroot "$ROOTFS_MOUNT" pacman-key --lsign-key AE4108FA5E91E26BE0EE331E0F5B3AD16E023091
+
+          sudo tee -a "$ROOTFS_MOUNT/etc/pacman.conf" >/dev/null <<'EOF'
+
+          [denial]
+          Server = https://packages.denialwm.org/arch/$arch
+          SigLevel = Required DatabaseOptional
+          EOF
+
+          sudo chroot "$ROOTFS_MOUNT" pacman -Sy --noconfirm --disable-download-timeout
+          sudo chroot "$ROOTFS_MOUNT" pacman -S --needed --noconfirm --disable-download-timeout \
+            denial sddm seatd \
+            pipewire pipewire-pulse wireplumber
+          echo "✓ denial installed"
+
+      - name: "Install desktop"
         if: ${{ inputs.desktop == 'niri' }}
         run: |
           set -euo pipefail
@@ -372,7 +395,7 @@ jobs:
               cat <<EOF | sudo tee "$ROOTFS_MOUNT/etc/sddm.conf.d/autologin.conf" >/dev/null
           [Autologin]
           User=${{ inputs.username }}
-          Session=niri
+          Session=${{ inputs.desktop }}
           EOF
             fi
           fi
@@ -453,7 +476,7 @@ jobs:
             cat /etc/hostname
             id ${{ inputs.username }}
             echo '--- desktop ---'
-            pacman -Qq | grep -E '^(gnome-shell|niri|gdm|sddm)$' || true
+            pacman -Qq | grep -E '^(gnome-shell|niri|denial|gdm|sddm)$' || true
             echo '--- initramfs ---'
             ls -lh /boot/initramfs-linux-iceland.img
           "
