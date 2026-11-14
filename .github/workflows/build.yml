@@ -425,9 +425,9 @@ jobs:
       - name: "Copy boot files out"
         run: |
           set -euo pipefail
-          sudo cp "$ROOTFS_MOUNT/boot/vmlinuz-linux-iceland" Image
-          sudo cp "$ROOTFS_MOUNT/boot/Image.gz" Image.gz
-          sudo cp "$ROOTFS_MOUNT/boot/initramfs-linux-iceland.img" initramfs.img
+          sudo install -m644 "$ROOTFS_MOUNT/boot/vmlinuz-linux-iceland" Image
+          sudo install -m644 "$ROOTFS_MOUNT/boot/Image.gz" Image.gz
+          sudo install -m644 "$ROOTFS_MOUNT/boot/initramfs-linux-iceland.img" initramfs.img
           echo "✓ boot files copied"
 
       - name: "Clean up"
