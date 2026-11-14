@@ -260,7 +260,7 @@ jobs:
       - name: "Initialise pacman keyring"
         run: |
           set -euo pipefail
-          printf 'Server = https://mirror.archlinuxarm.org/$arch/$repo\n' | \
+          printf 'Server = http://mirror.archlinuxarm.org/$arch/$repo\nServer = https://ca.us.mirror.archlinuxarm.org/$arch/$repo\n' | \
             sudo tee "$ROOTFS_MOUNT/etc/pacman.d/mirrorlist" >/dev/null
           sudo chroot "$ROOTFS_MOUNT" pacman-key --init
           sudo chroot "$ROOTFS_MOUNT" pacman-key --populate archlinuxarm
