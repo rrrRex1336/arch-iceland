@@ -31,7 +31,7 @@
 
 | 参数 | 说明 | 默认 |
 | --- | --- | --- |
-| `desktop` | `GNOME` / `niri` / `server` | `GNOME` |
+| `desktop` | `GNOME` / `denial` / `niri` / `server` | `GNOME` |
 | `autologin` | 自动登录 | `true` |
 | `username` | 用户名 | `user` |
 | `hostname` | 主机名 | `iceland` |
@@ -55,7 +55,8 @@
 
 - 使用 [Arch Linux ARM](https://archlinuxarm.org) 官方 aarch64 tarball（约 800 MB）。
 - 解包后 `pacman-key --init/--populate`，完整 `pacman -Syu`，再安装桌面与系统包。
-- GNOME：`gnome` + `gdm`；niri：`niri` + `sddm`，附带 `foot`、`fuzzel`、`mako`、`swaybg`、`xwayland-satellite`。
+- GNOME：`gnome-shell` 等核心包 + `gdm`；niri：`niri` + `sddm`，附带 `foot`、`fuzzel`、`mako`、`swaybg`、`xwayland-satellite`。
+- denial（denialwm）：从官方 aarch64 pacman 仓库（`packages.denialwm.org`）安装 `denial`，导入它的 GPG key，登录器用 `sddm`，会话名 `denial`。
 - 内核不是 pacman 包，而是直接安装到 `/boot` 与 `/usr/lib/modules`，用 `mkinitcpio` 生成 initramfs（预设 `/etc/mkinitcpio.d/linux-iceland.preset`）。
 
 ## 内核
@@ -96,7 +97,6 @@ fastboot reboot
 
 - 未在 OPD2513 / OPD2514 真机验证。
 - 音频、传感器、摄像头等设备包尚未处理。
-- Deepin（DDE）在 Arch Linux ARM 上没有完整打包（缺 `startdde`、`dde-daemon` 等），因此桌面只提供 GNOME / niri。
 - `uefi_esp` 需要你自备 U-Boot。
 - 单系统模式会清空 Android 数据。
 
