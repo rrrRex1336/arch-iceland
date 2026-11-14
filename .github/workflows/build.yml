@@ -180,7 +180,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             bc bison clang cpio curl dosfstools flex git libelf-dev \
-            libssl-dev lld llvm mtools python3 tar xz-utils zstd
+            libssl-dev lld llvm mtools procps psmisc python3 tar xz-utils zstd
           echo "✓ tools installed"
 
       # ------------------------------------------------------------------
