@@ -441,18 +441,16 @@ jobs:
         run: |
           set -euo pipefail
           sync
-          for m in dev/pts dev proc sys; do
-            sudo umount "$ROOTFS_MOUNT/$m" 2>/dev/null || true
-          done
-          # pacman-key can leave a gpg-agent inside the chroot holding the mount
           sudo fuser -km "$ROOTFS_MOUNT" 2>/dev/null || true
           sleep 1
           for attempt in 1 2 3; do
-            if sudo umount "$ROOTFS_MOUNT" 2>/dev/null; then break; fi
+            if sudo umount -R "$ROOTFS_MOUNT" 2>/dev/null; then break; fi
             sleep 2
           done
           if mountpoint -q "$ROOTFS_MOUNT"; then
             echo "::error::$ROOTFS_MOUNT is still mounted"
+            findmnt -R "$ROOTFS_MOUNT" || true
+            losetup -a || true
             sudo fuser -vm "$ROOTFS_MOUNT" || true
             exit 1
           fi
@@ -461,7 +459,7 @@ jobs:
       - name: "Finalise image"
         run: |
           set -euo pipefail
-          tune2fs -U random rootfs.img
+          sync
           echo "✓ rootfs.img finalised"
 
       # ------------------------------------------------------------------
